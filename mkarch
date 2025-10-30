@@ -1,0 +1,71 @@
+#!/bin/bash
+
+
+while getopts "d:n:" opt; do
+    case "$opt" in
+        d) DIR_PATH="$OPTARG" ;;
+        n) ARCH_NAME="$OPTARG" ;;
+        *) echo "Использование: $0 -d dir_path -n name"; exit 1 ;;
+    esac
+done
+
+if [[ -z "$DIR_PATH" || -z "$ARCH_NAME" ]]; then
+    echo "Ошибка: оба параметра -d и -n обязательны."
+    echo "Пример: $0 -d /path/to/dir -n myarchive"
+    exit 1
+fi
+
+if [[ ! -d "$DIR_PATH" ]]; then
+    echo "Ошибка: каталог '$DIR_PATH' не найден!"
+    exit 1
+fi
+
+TMP_TAR=$(mktemp /tmp/mkarch.XXXXXX.tar)
+TMP_GZ="${TMP_TAR}.gz"
+
+tar -cf "$TMP_TAR" -C "$(dirname "$DIR_PATH")" "$(basename "$DIR_PATH")"
+gzip "$TMP_TAR"
+
+if base64 --help 2>&1 | grep -qi "gnu"; then
+    BASE64_ENCODE="base64"
+else
+    BASE64_ENCODE="base64 -i"
+fi
+
+cat > "$ARCH_NAME" <<'EOF'
+#!/bin/bash
+
+OUTDIR="."
+while getopts "o:" opt; do
+    case "$opt" in
+        o) OUTDIR="$OPTARG" ;;
+        *) echo "Использование: $0 [-o output_dir]"; exit 1 ;;
+    esac
+done
+
+if [[ ! -d "$OUTDIR" ]]; then
+    echo "Каталог $OUTDIR не существует. Создаю..."
+    mkdir -p "$OUTDIR" || { echo "Не удалось создать каталог"; exit 1; }
+fi
+
+ARCH_START=$(awk '/^__ARCHIVE_BELOW__/ {print NR + 1; exit 0;}' "$0")
+tail -n +$ARCH_START "$0" | base64 --decode | gzip -d | tar -x -C "$OUTDIR"
+
+echo "✅ Архив успешно распакован в каталог: $OUTDIR"
+exit 0
+
+__ARCHIVE_BELOW__
+EOF
+
+if [[ "$BASE64_ENCODE" == "base64" ]]; then
+    base64 "$TMP_GZ" >> "$ARCH_NAME"
+else
+    base64 -i "$TMP_GZ" >> "$ARCH_NAME"
+fi
+
+chmod +x "$ARCH_NAME"
+
+rm -f "$TMP_GZ"
+
+echo "✅ Самораспаковывающийся архив успешно создан: ./$ARCH_NAME"
+exit 0
